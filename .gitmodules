@@ -1,0 +1,9 @@
+[submodule "concurrentqueue"]
+	path = concurrentqueue
+	url = https://github.com/cameron314/concurrentqueue
+[submodule "simdjson"]
+	path = simdjson
+	url = https://github.com/simdjson/simdjson
+[submodule "readerwriterqueue"]
+	path = readerwriterqueue
+	url = https://github.com/cameron314/readerwriterqueue.git
