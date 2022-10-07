@@ -9,12 +9,13 @@ RTPAudioSender::RTPAudioSender() : name("rtp audio sender"), queue(4) {
 }
 
 RTPAudioSender::~RTPAudioSender() {
+    std::cout << name << ": next lines are triggered by ~RTPAudioSender() call" << std::endl;
     stop();
     avformat_free_context(format_ctx);
 }
 
-std::string RTPAudioSender::init(const char *url, AVCodecContext *codec_ctx) {
-    format = av_guess_format("rtp", url, NULL);
+void RTPAudioSender::init(const char *url, AVCodecContext *codec_ctx, const char *type) {
+    format = av_guess_format(type, url, NULL);
     if (!format) {
         throw InitFail("could not guess format");
     }
@@ -41,7 +42,7 @@ std::string RTPAudioSender::init(const char *url, AVCodecContext *codec_ctx) {
     }
 
     stream->index = format_ctx->nb_streams - 1;
-    stream->time_base = codec_ctx->time_base;
+    src_timebase = codec_ctx->time_base;
     avcodec_parameters_from_context(stream->codecpar, codec_ctx);
 
     /* open the output file, if needed */
@@ -60,16 +61,7 @@ std::string RTPAudioSender::init(const char *url, AVCodecContext *codec_ctx) {
     }
 
     av_dump_format(format_ctx, 0, url, 1);
-
-    char buffer[1024];
-    if(av_sdp_create(&format_ctx, 1, buffer, sizeof(buffer)) < 0) {
-        throw InitFail("fail to generate sdp");
-    }
-
-    printf("%s\n", buffer);
-
     initialized = true;
-    return buffer;
 }
 
 std::string RTPAudioSender::generateSdp() {
@@ -82,22 +74,36 @@ std::string RTPAudioSender::generateSdp() {
 }
 
 void RTPAudioSender::start() {
-    if (stop_condition) {
-        stop_condition = false;
+    if (initialized && stop_condition.load(std::memory_order_relaxed)) {
+        stop_condition.store(false, std::memory_order_relaxed);
         thread = std::thread(&RTPAudioSender::run, this);
+    } else {
+        std::cout << name << ": not initialized or thread already running" << std::endl;
+    }
+}
+
+void RTPAudioSender::stop() {
+    if (!stop_condition.load(std::memory_order_relaxed)) {
+        stop_condition.store(true, std::memory_order_relaxed);
+        if (thread.joinable()) {
+            thread.join();
+        } else {
+            std::cout << name << ": thread is not joinable" << std::endl;
+        }
+    } else {
+        std::cout << name << ": thread is not running" << std::endl;
     }
 }
 
 void RTPAudioSender::run() {
-    std::mutex m;
     AVPacket *packet = nullptr;
     try {
-        while (!stop_condition && initialized) {
+        while (!stop_condition.load(std::memory_order_relaxed)) {
             if (!queue.wait_dequeue_timed(packet, std::chrono::milliseconds(100))) {
                 continue;
             }
 
-            //av_packet_rescale_ts(packet, codec_ctx->time_base, stream->time_base);
+            av_packet_rescale_ts(packet, src_timebase, stream->time_base);
             if (av_interleaved_write_frame(format_ctx, packet) < 0) {
                 throw InitFail("Error while writing");
             }
@@ -106,13 +112,6 @@ void RTPAudioSender::run() {
         }
     } catch (const std::exception &e) {
         std::cout << e.what() << std::endl;
-    }
-}
-
-void RTPAudioSender::stop() {
-    if (!stop_condition) {
-        stop_condition = true;
-        thread.join();
     }
 }
 

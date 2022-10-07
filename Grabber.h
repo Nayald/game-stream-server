@@ -12,6 +12,7 @@ extern "C" {
 #include <string>
 #include <unordered_map>
 #include <thread>
+#include <atomic>
 
 #include "Source.h"
 
@@ -24,7 +25,7 @@ protected:
     int stream_index;
     AVCodecContext *codec_ctx = nullptr;
 
-    bool stop_condition = true;
+    std::atomic<bool> stop_condition = true;
     std::thread grab_thread;
 
     explicit Grabber(std::string name);
@@ -36,6 +37,8 @@ public:
 
     void start();
     void stop();
+
+protected:
     void run();
 };
 

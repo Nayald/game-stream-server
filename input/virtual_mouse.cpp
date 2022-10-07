@@ -13,7 +13,7 @@ extern "C" {
 #include "../exception.h"
 
 constexpr auto INPUT_RELEASE_DELAY = std::chrono::milliseconds(50);
-constexpr std::array<uint16_t, 5> SDL2LINUX_MOUSE = {BTN_LEFT, BTN_RIGHT, BTN_MIDDLE, BTN_SIDE, BTN_EXTRA};
+constexpr std::array<uint16_t, 5> SDL2LINUX_MOUSE = {BTN_LEFT, BTN_MIDDLE, BTN_RIGHT, BTN_SIDE, BTN_EXTRA};
 
 std::atomic<size_t> VirtualMouse::counter = {0};
 
@@ -65,8 +65,25 @@ void VirtualMouse::init() {
 }
 
 void VirtualMouse::startRelease() {
-    release_stop_condition = false;
-    release_thread = std::thread(&VirtualMouse::release, this);
+    if (initialized && release_stop_condition.load(std::memory_order_relaxed)) {
+        release_stop_condition.store(false, std::memory_order_relaxed);
+        release_thread = std::thread(&VirtualMouse::release, this);
+    } else {
+        std::cout << name << ": not initialized or thread already running" << std::endl;
+    }
+}
+
+void VirtualMouse::stopRelease() {
+    if (!release_stop_condition.load(std::memory_order_relaxed)) {
+        release_stop_condition.store(true, std::memory_order_relaxed);
+        if (release_thread.joinable()) {
+            release_thread.join();
+        } else {
+            std::cout << name << ": thread is not joinable" << std::endl;
+        }
+    } else {
+        std::cout << name << ": thread is not running" << std::endl;
+    }
 }
 
 void VirtualMouse::release() {
@@ -95,11 +112,6 @@ void VirtualMouse::release() {
         write(fd, events.data(), sizeof(input_event) * events.size());
         lock.unlock();
     };
-}
-
-void VirtualMouse::stopRelease() {
-    release_stop_condition = true;
-    release_thread.join();
 }
 
 void VirtualMouse::setPositionRelative(int x, int y) {
@@ -132,7 +144,7 @@ void VirtualMouse::setButtonStates(int button_states) {
     }
 
     if (!events.empty()) {
-        events.push_back({{ 0, 0 }, EV_SYN, SYN_REPORT, 0});
+        events.push_back({{0, 0}, EV_SYN, SYN_REPORT, 0});
     }
 
     write(fd, events.data(), sizeof(input_event) * events.size());

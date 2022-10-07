@@ -79,7 +79,7 @@ void H264Encoder::init(const std::unordered_map<std::string, std::string> &param
 void H264Encoder::runFeed() {
     std::cerr << name << ": feed thread pid is " << gettid() << std::endl;
     std::cout << gettid() << std::endl;
-    AVFrame* frame;
+    AVFrame* frame = nullptr;
     try {
         while (initialized && !feed_stop_condition) {
             if (!queue.wait_dequeue_timed(frame, std::chrono::milliseconds(100))) {

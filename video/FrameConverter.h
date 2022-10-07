@@ -26,7 +26,7 @@ private:
     std::string name;
     bool initialized = false;
 
-    bool stop_condition = true;
+    std::atomic<bool> stop_condition = true;
     std::vector<std::thread> threads;
     std::vector<std::pair<SwsContext*, AVFrame*>> contexts;
     //AVBufferPool *buffer_pool = nullptr;
@@ -40,10 +40,12 @@ public:
     void init(AVCodecContext *source_ctx, AVCodecContext *sink_ctx, int concurrency=1);
 
     void start();
-    void run(size_t i);
     void stop();
 
     void handle(AVFrame *frame) override;
+
+private:
+    void run(size_t i);
 };
 
 

@@ -216,8 +216,25 @@ void VirtualKeyboard::init() {
 }
 
 void VirtualKeyboard::startRelease() {
-    release_stop_condition = false;
-    release_thread = std::thread(&VirtualKeyboard::release, this);
+    if (initialized && release_stop_condition.load(std::memory_order_relaxed)) {
+        release_stop_condition.store(false, std::memory_order_relaxed);
+        release_thread = std::thread(&VirtualKeyboard::release, this);
+    } else {
+        std::cout << name << ": not initialized or thread already running" << std::endl;
+    }
+}
+
+void VirtualKeyboard::stopRelease() {
+    if (!release_stop_condition.load(std::memory_order_relaxed)) {
+        release_stop_condition.store(true, std::memory_order_relaxed);
+        if (release_thread.joinable()) {
+            release_thread.join();
+        } else {
+            std::cout << name << ": thread is not joinable" << std::endl;
+        }
+    } else {
+        std::cout << name << ": thread is not running" << std::endl;
+    }
 }
 
 void VirtualKeyboard::release() {
@@ -246,11 +263,6 @@ void VirtualKeyboard::release() {
         write(fd, &events, sizeof(input_event) * events.size());
         lock.unlock();
     };
-}
-
-void VirtualKeyboard::stopRelease() {
-    release_stop_condition = true;
-    release_thread.join();
 }
 
 void VirtualKeyboard::setKeyState(int symkey, bool pressed) {

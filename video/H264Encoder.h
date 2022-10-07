@@ -25,10 +25,11 @@ public:
 
     void init(const std::unordered_map<std::string, std::string> &params) override;
 
+    void handle(AVFrame *frame) override;
+
+private:
     void runFeed() override;
     void feedImpl(AVFrame *frame);
-
-    void handle(AVFrame *frame) override;
 };
 
 

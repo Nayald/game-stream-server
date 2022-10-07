@@ -9,7 +9,12 @@ FrameConverter::FrameConverter() : name("video frame converter"), queue(4) {
 }
 
 FrameConverter::~FrameConverter() {
+    std::cout << name << ": next lines are triggered by ~FrameConverter() call" << std::endl;
     stop();
+    for (auto& [context, frame] : contexts) {
+        sws_freeContext(context);
+        av_frame_free(&frame);
+    }
 }
 
 /*void FrameConverter::init(const std::unordered_map<std::string, std::string> &params) {
@@ -37,55 +42,32 @@ void FrameConverter::init(AVCodecContext *source_ctx, AVCodecContext *sink_ctx, 
 
     //buffer_pool = av_buffer_pool_init(av_image_get_buffer_size(sink_ctx->pix_fmt, sink_ctx->width, sink_ctx->height, 0), NULL); // example YUV420 = 12 * w * h
     initialized = true;
-    std::cout << name << ": init successfully" << std::endl;
+    std::cerr << name << ": initialized" << std::endl;
 }
 
 void FrameConverter::start() {
-    stop_condition = false;
-    for (size_t i = 0; i < contexts.size(); ++i) {
-        threads.emplace_back(&FrameConverter::run, this, i);
-    }
-}
-
-void FrameConverter::run(size_t i) {
-    AVFrame* frame_in = nullptr;
-    AVFrame* frame_out = av_frame_alloc();
-    while (!stop_condition && initialized) {
-        if (!queue.wait_dequeue_timed(frame_in, std::chrono::milliseconds(100))) {
-            continue;
+    if (initialized && stop_condition.load(std::memory_order_relaxed)) {
+        stop_condition.store(false, std::memory_order_relaxed);
+        for (size_t i = 0; i < contexts.size(); ++i) {
+            threads.emplace_back(&FrameConverter::run, this, i);
         }
-
-        av_frame_copy_props(frame_out, frame_in);
-        frame_out->format = contexts[i].second->format;
-        frame_out->width = contexts[i].second->width;
-        frame_out->height = contexts[i].second->height;
-        if (av_frame_get_buffer(frame_out, 0) < 0) {
-            std::cerr << "error" << std::endl;
-        }
-
-        /*frame_out->buf[0] = av_buffer_pool_get(buffer_pool);
-        frame_out->linesize[0] = contexts[i].second->linesize[0];
-        frame_out->linesize[1] = contexts[i].second->linesize[1];
-        frame_out->linesize[2] = contexts[i].second->linesize[2];
-        frame_out->data[0] = frame_out->buf[0]->data;
-        frame_out->data[1] = frame_out->data[0] + 2088992;
-        frame_out->data[2] = frame_out->data[1] + 522272;
-        *frame_out->extended_data = frame_out->buf[0]->data;*/
-
-        sws_scale(contexts[i].first, frame_in->data, frame_in->linesize, 0, frame_in->height, frame_out->data, frame_out->linesize);
-        forward(frame_out);
-        av_frame_unref(frame_out);
-        av_frame_free(&frame_in);
+    } else {
+        std::cout << name << ": not initialized or thread already running" << std::endl;
     }
-
-    av_frame_free(&frame_out);
 }
 
 void FrameConverter::stop() {
-    if (!stop_condition) {
+    if (!stop_condition.load(std::memory_order_relaxed)) {
+        stop_condition.store(true, std::memory_order_relaxed);
         for (auto& thread : threads) {
-            thread.join();
+            if (thread.joinable()) {
+                thread.join();
+            } else {
+                std::cout << name << ": thread is not joinable" << std::endl;
+            }
         }
+    } else {
+        std::cout << name << ": threads are not running" << std::endl;
     }
 }
 
@@ -94,4 +76,43 @@ void FrameConverter::handle(AVFrame *frame) {
         std::cout << name << ": queue is full" << std::endl;
         av_frame_free(&frame);
     }
+}
+
+void FrameConverter::run(size_t i) {
+    AVFrame* frame_in = nullptr;
+    AVFrame* frame_out = av_frame_alloc();
+    try {
+        while (!stop_condition.load(std::memory_order_relaxed)) {
+            if (!queue.wait_dequeue_timed(frame_in, std::chrono::milliseconds(100))) {
+                continue;
+            }
+
+            av_frame_copy_props(frame_out, frame_in);
+            frame_out->format = contexts[i].second->format;
+            frame_out->width = contexts[i].second->width;
+            frame_out->height = contexts[i].second->height;
+            if (av_frame_get_buffer(frame_out, 0) < 0) {
+                throw RunError("can't allocate buffer");
+            }
+
+            /*frame_out->buf[0] = av_buffer_pool_get(buffer_pool);
+            frame_out->linesize[0] = contexts[i].second->linesize[0];
+            frame_out->linesize[1] = contexts[i].second->linesize[1];
+            frame_out->linesize[2] = contexts[i].second->linesize[2];
+            frame_out->data[0] = frame_out->buf[0]->data;
+            frame_out->data[1] = frame_out->data[0] + 2088992;
+            frame_out->data[2] = frame_out->data[1] + 522272;
+            *frame_out->extended_data = frame_out->buf[0]->data;*/
+
+            sws_scale(contexts[i].first, frame_in->data, frame_in->linesize, 0, frame_in->height, frame_out->data, frame_out->linesize);
+            forward(frame_out);
+            av_frame_unref(frame_out);
+            av_frame_free(&frame_in);
+        }
+    } catch (const std::exception &e) {
+        std::cerr << e.what() << std::endl;
+    }
+
+    av_frame_free(&frame_out);
+    av_frame_free(&frame_in);
 }

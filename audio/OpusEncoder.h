@@ -15,7 +15,7 @@ extern "C" {
 
 class OpusEncoder : public Encoder {
 private:
-    AVAudioFifo *fifo;
+    AVAudioFifo *fifo = nullptr;
     spinlock lock;
     std::condition_variable cv;
 

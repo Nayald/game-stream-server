@@ -19,6 +19,7 @@ OpusEncoder::OpusEncoder() : Encoder("opus encoder") {
 }
 
 OpusEncoder::~OpusEncoder() {
+    std::cout << name << ": next lines are triggered by ~OpusEncoder() call" << std::endl;
     av_audio_fifo_free(fifo);
 }
 
@@ -26,6 +27,10 @@ void OpusEncoder::init(const std::unordered_map<std::string, std::string> &param
     // re-init check, free old context
     if (codec_ctx) {
         avcodec_free_context(&codec_ctx);
+    }
+
+    if (fifo) {
+        av_audio_fifo_free(fifo);
     }
 
     AVCodec *codec = avcodec_find_encoder_by_name("libopus");
@@ -70,7 +75,7 @@ void OpusEncoder::init(const std::unordered_map<std::string, std::string> &param
 
     fifo = av_audio_fifo_alloc(codec_ctx->sample_fmt, codec_ctx->channels, 2 * codec_ctx->frame_size);
     if (!fifo) {
-        throw RunError("fail to allocate audio buffer");
+        throw InitFail("fail to allocate audio buffer");
     }
 
     initialized = true;

@@ -2,6 +2,7 @@
 #include <csignal>
 #include <iostream>
 #include <thread>
+#include <atomic>
 
 #include "video/X11Grabber.h"
 #include "video/FrameConverter.h"
@@ -11,10 +12,10 @@
 #include "network/socket_server.h"
 
 
-bool stop = false;
-void signalHandler( int signum ) {
+std::atomic<bool> stop = false;
+void signalHandler(int signum) {
     std::cout << "Interrupt signal (" << signum << ") received.\n";
-    stop = true;
+    stop.store(true, std::memory_order_relaxed);
 }
 
 int main() {
@@ -52,7 +53,8 @@ int main() {
 
         //video chain
         std::unordered_map<std::string, std::string> video_grabber_options = {
-                {"video_size", "2560x1440"},
+                //{"video_size", "2560x1440"},
+                {"video_size", "1920x1080"},
                 {"framerate", "60"},
                 {"follow_mouse", "centered"},
                 {"probesize", "32M"},
@@ -96,16 +98,18 @@ int main() {
         server.init();
         server.start();
 
-        while (!stop) {
+        while (!stop.load(std::memory_order_relaxed)) {
             std::this_thread::sleep_for(std::chrono::seconds(1));
         }
 
-        audio_source.stop();
-        audio_encoder.stop();
-        video_source.stop();
-        video_converter.stop();
-        video_encoder.stop();
+        std::cout << "stop all threads..." << std::endl;
         server.stop();
+        video_encoder.stop();
+        video_converter.stop();
+        video_source.stop();
+        audio_encoder.stop();
+        audio_source.stop();
+        std::cout << "done" << std::endl;
 
     } catch (std::exception &e) {
         std::cout << e.what() << std::endl;

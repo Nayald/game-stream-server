@@ -117,8 +117,25 @@ void VirtualGamepad::init() {
 }
 
 void VirtualGamepad::startRelease() {
-    release_stop_condition = false;
-    release_thread = std::thread(&VirtualGamepad::release, this);
+    if (initialized && release_stop_condition.load(std::memory_order_relaxed)) {
+        release_stop_condition.store(false, std::memory_order_relaxed);
+        release_thread = std::thread(&VirtualGamepad::release, this);
+    } else {
+        std::cout << name << ": not initialized or thread already running" << std::endl;
+    }
+}
+
+void VirtualGamepad::stopRelease() {
+    if (!release_stop_condition.load(std::memory_order_relaxed)) {
+        release_stop_condition.store(true, std::memory_order_relaxed);
+        if (release_thread.joinable()) {
+            release_thread.join();
+        } else {
+            std::cout << name << ": thread is not joinable" << std::endl;
+        }
+    } else {
+        std::cout << name << ": thread is not running" << std::endl;
+    }
 }
 
 void VirtualGamepad::release() {
@@ -147,11 +164,6 @@ void VirtualGamepad::release() {
         write(fd, events.data(), sizeof(input_event) * events.size());
         lock.unlock();
     };
-}
-
-void VirtualGamepad::stopRelease() {
-    release_stop_condition = true;
-    release_thread.join();
 }
 
 void VirtualGamepad::setPositionAbsolute(int x, int y, int rx, int ry, int z, int rz) {
@@ -188,7 +200,7 @@ void VirtualGamepad::setButtonStates(int button_states) {
     }
 
     if (!events.empty()) {
-        events.push_back({{ 0, 0 }, EV_SYN, SYN_REPORT, 0});
+        events.push_back({{0, 0}, EV_SYN, SYN_REPORT, 0});
     }
 
     write(fd, events.data(), sizeof(input_event) * events.size());

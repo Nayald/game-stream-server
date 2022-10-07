@@ -52,6 +52,7 @@ RemoteSession::RemoteSession(sockaddr_in remote_address, int tcp_socket) : remot
 }
 
 RemoteSession::~RemoteSession() {
+    std::cout << name << ": next lines are triggered by ~RemoteSession() call" << std::endl;
     close(tcp_socket);
 }
 
@@ -87,12 +88,10 @@ void RemoteSession::init(AVCodecContext *audio_context, AVCodecContext *video_co
     }
 
     char buffer[32];
-    std::stringstream ss;
-    ss << R"({"t":"R","g":0,"r":")";
     std::sprintf(buffer, "rtp://%s:%d", inet_ntoa(remote_address.sin_addr), 10000);
-    appendJSONFormattedString(ss, rtp_audio.init(buffer, audio_context));
+    rtp_audio.init(buffer, audio_context);
     std::sprintf(buffer, "rtp://%s:%d", inet_ntoa(remote_address.sin_addr), 10002);
-    appendJSONFormattedString(ss, rtp_video.init(buffer, video_context));
+    rtp_video.init(buffer, video_context);
 
     keyboard.init();
     mouse.init();
@@ -118,6 +117,7 @@ void RemoteSession::start() {
     rtp_video.start();
     keyboard.startRelease();
     mouse.startRelease();
+    gamepad.startRelease();
 }
 
 void RemoteSession::run() {
@@ -178,6 +178,7 @@ void RemoteSession::stop() {
     rtp_video.stop();
     keyboard.stopRelease();
     mouse.stopRelease();
+    gamepad.stopRelease();
 }
 
 std::chrono::steady_clock::time_point RemoteSession::getLastUpdate() const {
@@ -206,14 +207,14 @@ size_t RemoteSession::handleCommands(char *buffer, size_t size, size_t capacity)
             // client ask a rtp endpoint
             if (query == "rtp") {
                 std::stringstream ss;
-                ss << R"({"t":"R","g":1,"r":")";
+                ss << R"({"t":"R","g":0,"k":0,"v":")";
                 appendJSONFormattedString(ss, rtp_audio.generateSdp());
                 ss << R"("})";
                 write(ss.str());
 
                 ss.str(std::string());
                 ss.clear();
-                ss << R"({"t":"R","g":0,"r":")";
+                ss << R"({"t":"R","g":1,"k":0,"v":")";
                 appendJSONFormattedString(ss, rtp_video.generateSdp());
                 ss << R"("})";
                 write(ss.str());

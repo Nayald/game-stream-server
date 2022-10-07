@@ -14,18 +14,36 @@ SocketServer::SocketServer(Encoder &audio_enc, Encoder &video_enc) : name("socke
 }
 
 SocketServer::~SocketServer() {
+    std::cout << name << ": next lines are triggered by ~SocketServer() call" << std::endl;
     stop();
+    if (sockfd > 0) {
+        close(sockfd);
+        sockfd = -1;
+    }
+
+    auto it = sessions.begin();
+    while (it != sessions.end()) {
+        std::cout << "purge session for " << (it->first & 0xFF) << '.' << (it->first >> 8 & 0xFF) << '.'
+                  << (it->first >> 16 & 0xFF) << '.' << (it->first >> 24 & 0xFF) << std::endl;
+        it->second.stop();
+        audio_enc.detachSink(&it->second.getRtpAudio());
+        video_enc.detachSink(&it->second.getRtpVideo());
+        it = sessions.erase(it);
+    }
 }
 
 void SocketServer::init() {
-    sockfd = socket(AF_INET, SOCK_STREAM, 0);
-    if (sockfd < 0) {
-        throw "socket creation failed";
+    if (sockfd > 0) {
+        close(sockfd);
+        sockfd = -1;
     }
 
-    sockaddr_in server_address = {};
+    sockfd = socket(AF_INET, SOCK_STREAM, 0);
+    if (sockfd < 0) {
+        throw InitFail("socket creation failed");
+    }
 
-    // Filling server information
+    sockaddr_in server_address;
     server_address.sin_family = AF_INET;
     server_address.sin_addr.s_addr = INADDR_ANY;
     server_address.sin_port = htons(9999);
@@ -47,23 +65,31 @@ void SocketServer::init() {
 }
 
 void SocketServer::start() {
-    if (stop_condition) {
-        stop_condition = false;
+    if (initialized && stop_condition.load(std::memory_order_relaxed)) {
+        stop_condition.store(false, std::memory_order_relaxed);
         listen_thread = std::thread(&SocketServer::listenSocket, this);
         purge_thread = std::thread(&SocketServer::purge, this);
+    } else {
+        std::cout << name << ": not initialized or threads already running" << std::endl;
     }
 }
 
 void SocketServer::stop() {
-    if (!stop_condition) {
-        stop_condition = true;
+    if (!stop_condition.load(std::memory_order_relaxed)) {
+        stop_condition.store(true, std::memory_order_relaxed);
         if (listen_thread.joinable()) {
             listen_thread.join();
+        } else {
+            std::cout << name << ": listen thread is not joinable" << std::endl;
         }
 
         if (purge_thread.joinable()) {
             purge_thread.join();
+        } else {
+            std::cout << name << ": purge thread is not joinable" << std::endl;
         }
+    } else {
+        std::cout << name << ": threads are not running" << std::endl;
     }
 }
 
@@ -74,7 +100,7 @@ void SocketServer::listenSocket() {
     int client_socket;
     sockaddr_in client_address;
     socklen_t client_address_size;
-    while (initialized && !stop_condition) {
+    while (!stop_condition.load(std::memory_order_relaxed)) {
         FD_ZERO(&fds);
         FD_SET(sockfd, &fds);
         FD_SET(sockfd, &fds);
@@ -95,8 +121,12 @@ void SocketServer::listenSocket() {
             lock.lock();
             auto it = sessions.find(client_address.sin_addr.s_addr);
             if (it != sessions.end()) {
-                std::cout << "new sessions from existing client, renew" << std::endl;
+                std::cout << "new sessions from existing client (" << (it->first & 0xFF) << '.'
+                << (it->first >> 8 & 0xFF) << '.' << (it->first >> 16 & 0xFF) << '.'
+                << (it->first >> 24 & 0xFF) << "), renew" << std::endl;
                 it->second.stop();
+                audio_enc.detachSink(&it->second.getRtpAudio());
+                video_enc.detachSink(&it->second.getRtpVideo());
                 sessions.erase(it);
             }
 
@@ -118,7 +148,7 @@ void SocketServer::listenSocket() {
 
 void SocketServer::purge() {
     std::cerr << name << ": purge thread pid is " << gettid() << std::endl;
-    while (initialized && !stop_condition) {
+    while (!stop_condition.load(std::memory_order_relaxed)) {
         std::this_thread::sleep_for(LOOKUP_DELAY);
         const auto current_time = std::chrono::steady_clock::now();
         lock.lock();

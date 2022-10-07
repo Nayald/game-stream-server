@@ -9,17 +9,17 @@ RTPVideoSender::RTPVideoSender() : name("rtp video sender"), queue(4) {
 }
 
 RTPVideoSender::~RTPVideoSender() {
+    std::cout << name << ": next lines are triggered by ~RTPVideoSender() call" << std::endl;
     stop();
     avformat_free_context(format_ctx);
 }
 
-std::string RTPVideoSender::init(const char *url, AVCodecContext *codec_ctx) {
-    format = av_guess_format("rtp", url, NULL);
-    //format = av_guess_format("rtp_mpegts", url, NULL);
+void RTPVideoSender::init(const char *url, AVCodecContext *codec_ctx, const char *type) {
+    format = av_guess_format(type, url, NULL);
     if (!format) {
         throw InitFail("could not guess format");
     }
-    std::cout << format->name << std::endl;
+    //std::cout << format->name << std::endl;
 
     format_ctx = avformat_alloc_context();
     if (!format_ctx) {
@@ -42,7 +42,7 @@ std::string RTPVideoSender::init(const char *url, AVCodecContext *codec_ctx) {
     }
 
     stream->index = format_ctx->nb_streams - 1;
-    //stream->time_base = codec_ctx->time_base;
+    src_timebase = codec_ctx->time_base;
     avcodec_parameters_from_context(stream->codecpar, codec_ctx);
 
     AVDictionary *options = NULL;
@@ -63,16 +63,7 @@ std::string RTPVideoSender::init(const char *url, AVCodecContext *codec_ctx) {
     }
 
     av_dump_format(format_ctx, 0, url, 1);
-
-    char buffer[1024];
-    if(av_sdp_create(&format_ctx, 1, buffer, sizeof(buffer)) < 0) {
-        throw InitFail("fail to generate sdp");
-    }
-
-    printf("%s\n", buffer);
-
     initialized = true;
-    return buffer;
 }
 
 std::string RTPVideoSender::generateSdp() {
@@ -85,22 +76,36 @@ std::string RTPVideoSender::generateSdp() {
 }
 
 void RTPVideoSender::start() {
-    if (stop_condition) {
-        stop_condition = false;
+    if (initialized && stop_condition.load(std::memory_order_relaxed)) {
+        stop_condition.store(false, std::memory_order_relaxed);
         thread = std::thread(&RTPVideoSender::run, this);
+    } else {
+        std::cout << name << ": not initialized or thread already running" << std::endl;
+    }
+}
+
+void RTPVideoSender::stop() {
+    if (!stop_condition.load(std::memory_order_relaxed)) {
+        stop_condition.store(true, std::memory_order_relaxed);
+        if (thread.joinable()) {
+            thread.join();
+        } else {
+            std::cout << name << ": thread is not joinable" << std::endl;
+        }
+    } else {
+        std::cout << name << ": thread is not running" << std::endl;
     }
 }
 
 void RTPVideoSender::run() {
-    //std::mutex m;
     AVPacket *packet = nullptr;
     try {
-        while (!stop_condition && initialized) {
+        while (!stop_condition.load(std::memory_order_relaxed)) {
             if (!queue.wait_dequeue_timed(packet, std::chrono::milliseconds(100))) {
                 continue;
             }
 
-            av_packet_rescale_ts(packet, {1, 60}, stream->time_base);
+            av_packet_rescale_ts(packet, src_timebase, stream->time_base);
             if (av_interleaved_write_frame(format_ctx, packet) < 0) {
                 throw InitFail("Error while writing");
             }
@@ -109,13 +114,6 @@ void RTPVideoSender::run() {
         }
     } catch (const std::exception &e) {
         std::cout << e.what() << std::endl;
-    }
-}
-
-void RTPVideoSender::stop() {
-    if (!stop_condition) {
-        stop_condition = true;
-        thread.join();
     }
 }
 

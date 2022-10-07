@@ -26,9 +26,9 @@ protected:
     AVCodecContext *codec_ctx = nullptr;
     int64_t frame_id = 0;
 
-    bool feed_stop_condition = true;
+    std::atomic<bool> feed_stop_condition = true;
     std::thread feed_thread;
-    bool drain_stop_condition = true;
+    std::atomic<bool> drain_stop_condition = true;
     std::thread drain_thread;
     spinlock encoder_lock;
     std::condition_variable encoder_cv;

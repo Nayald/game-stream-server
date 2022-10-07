@@ -26,8 +26,9 @@ private:
     AVOutputFormat *format = nullptr;
     AVFormatContext *format_ctx = nullptr;
     AVStream *stream = nullptr;
+    AVRational src_timebase;
 
-    bool stop_condition = true;
+    std::atomic<bool> stop_condition = true;
     std::thread thread;
     moodycamel::BlockingReaderWriterCircularBuffer<AVPacket*> queue;
 
@@ -35,14 +36,16 @@ public:
     RTPVideoSender();
     ~RTPVideoSender() override;
 
-    std::string init(const char *url, AVCodecContext *codec_ctx);
+    void init(const char *url, AVCodecContext *codec_ctx, const char *type="rtp");
     std::string generateSdp();
 
     void start();
-    void run();
     void stop();
 
     void handle(AVPacket *packet) override;
+
+private:
+    void run();
 
     void flush();
 };
