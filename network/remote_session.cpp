@@ -70,7 +70,7 @@ void RemoteSession::init(AVCodecContext *audio_context, AVCodecContext *video_co
     server_address.sin_port = htons(9999);
 
     const int enable = 1;
-    if (setsockopt(udp_socket, SOL_SOCKET, SO_REUSEPORT | SO_REUSEADDR, &enable, sizeof(enable)) < 0) {
+    if (setsockopt(udp_socket, SOL_SOCKET, SO_REUSEADDR, &enable, sizeof(enable)) < 0) {
         throw InitFail("fail to reuse udp address/port");
     }
 
@@ -123,8 +123,8 @@ void RemoteSession::start() {
 void RemoteSession::run() {
     fd_set fds;
     timeval tv;
-    alignas(64) char buffer[BUFFER_SIZE];
-    alignas(64) char stream_buffer[2 * BUFFER_SIZE];
+    alignas(64) uint8_t buffer[BUFFER_SIZE];
+    alignas(64) uint8_t stream_buffer[2 * BUFFER_SIZE];
     size_t stream_size = 0;
     try {
         while (!stop_condition) {
@@ -141,20 +141,42 @@ void RemoteSession::run() {
                 continue;
             } else {
                 if (FD_ISSET(tcp_socket, &fds)) {
-                    if (stream_size >= sizeof(stream_buffer) - simdjson::SIMDJSON_PADDING) {
-                        std::memmove(stream_buffer, stream_buffer + 1, stream_size -= 1);
+                    ssize_t size = recv(tcp_socket, stream_buffer + stream_size, sizeof(stream_buffer) - stream_size, 0);
+                    if (size < 0) {
+                        if (errno != EAGAIN || errno != EWOULDBLOCK) {
+                            throw RunError("error while reading socket");
+                        }
+                        continue;
                     }
 
-                    ssize_t size = recv(tcp_socket, stream_buffer + stream_size, sizeof(stream_buffer) - stream_size, 0);
-                    if (size > 0) {
-                        stream_size += size;
-                        size_t parsed_size = handleCommands(stream_buffer, stream_size, sizeof(stream_buffer));
-                        if (parsed_size > 0) {
-                            std::memmove(stream_buffer, stream_buffer + parsed_size, stream_size -= parsed_size);
+                    // ret == 0 means disconnection
+                    if (size == 0) {
+                        continue;
+                    }
+
+                    stream_size += size;
+                    size_t start_offset = 0;
+                    static constexpr uint8_t delimiter = 0xff;
+                    uint16_t msg_size;
+                    while (start_offset + sizeof(delimiter) + sizeof(msg_size) <= stream_size) {
+                        if (stream_buffer[start_offset] != delimiter) {
+                            start_offset += sizeof(delimiter);
+                            continue;
                         }
 
-                        last_update = std::chrono::steady_clock::now();
-                    }
+                        msg_size = ntohs(*reinterpret_cast<uint16_t*>(stream_buffer + start_offset + sizeof(delimiter)));
+                        // incomplete message
+                        if (start_offset + msg_size + sizeof(msg_size) + sizeof(delimiter) > stream_size) {
+                            break;
+                        }
+
+                        handleCommands(stream_buffer + start_offset + sizeof(msg_size) + sizeof(delimiter), msg_size, sizeof(stream_buffer) - start_offset - sizeof(msg_size) - sizeof(delimiter));
+                        start_offset += msg_size + sizeof(msg_size) + sizeof(delimiter);
+                    };
+
+                    // consume read data
+                    std::memmove(stream_buffer, stream_buffer + start_offset, stream_size -= start_offset);
+                    last_update = std::chrono::steady_clock::now();
                 }
 
                 if (FD_ISSET(udp_socket, &fds)) {
@@ -193,11 +215,9 @@ void RemoteSession::write(const char *msg, size_t size) {
     writeImpl(msg, size);
 }
 
-size_t RemoteSession::handleCommands(char *buffer, size_t size, size_t capacity) {
-    size_t parsed_bytes = 0;
+void RemoteSession::handleCommands(uint8_t *buffer, size_t size, size_t capacity) {
     try {
         simdjson::ondemand::document document = parser.iterate(buffer, size, capacity);
-        parsed_bytes = document.raw_json().value().size();
         const std::string_view type = document["t"];
         document.rewind();
         if (type == "k") {
@@ -219,15 +239,16 @@ size_t RemoteSession::handleCommands(char *buffer, size_t size, size_t capacity)
                 ss << R"("})";
                 write(ss.str());
             }
+        } else if (type == "n") {
+            const int64_t val = document["v"].value();
+            forward(&val);
         }
     } catch (const simdjson::simdjson_error &err) {
         std::cout << err.what() << std::endl;
     }
-
-    return parsed_bytes;
 }
 
-void RemoteSession::handleInputs(char *buffer, size_t size, size_t capacity) {
+void RemoteSession::handleInputs(uint8_t *buffer, size_t size, size_t capacity) {
     try {
         simdjson::ondemand::document document = parser.iterate(buffer, size, capacity);
         const std::string_view type = document["t"];
@@ -290,12 +311,18 @@ void RemoteSession::handleInputs(char *buffer, size_t size, size_t capacity) {
         }
     } catch (const simdjson::simdjson_error &err) {
         std::cout << err.what() << std::endl;
-        std::cout.write(buffer, size) << std::endl;
     }
 }
 
 void RemoteSession::writeImpl(const char *msg, size_t size) {
+    uint8_t msg_header[3];
+    msg_header[0] = 0xff;
+    for (size_t i = 0; i < sizeof(msg_header) - 1; i++){
+       msg_header[sizeof(msg_header) - 1 - i] = (size >> (8 * (sizeof(size) - i))) & 0xff;
+    }
+
     udp_socket_lock.lock();
+    send(tcp_socket, msg_header, sizeof(msg_header), 0);
     if (send(tcp_socket, msg, size, 0) != size) {
         std::cout << "not all bytes was sent to " << inet_ntoa(remote_address.sin_addr) << ":" << remote_address.sin_port << std::endl;
     }

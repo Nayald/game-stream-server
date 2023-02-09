@@ -17,12 +17,13 @@ extern "C" {
 
 #include "RTPAudioSender.h"
 #include "RTPVideoSender.h"
+#include "../Source.h"
 #include "../input/virtual_keyboard.h"
 #include "../input/virtual_mouse.h"
 #include "../input/virtual_gamepad.h"
 #include "../spinlock.h"
 
-class RemoteSession {
+class RemoteSession : public Source<const int64_t> {
 public:
     std::string name;
     bool initialized = false;
@@ -63,8 +64,8 @@ public:
     void write(const char *msg, size_t size);
 
 private:
-    size_t handleCommands(char *buffer, size_t size, size_t capacity);
-    void handleInputs(char *buffer, size_t size, size_t capacity);
+    void handleCommands(uint8_t *buffer, size_t size, size_t capacity);
+    void handleInputs(uint8_t *buffer, size_t size, size_t capacity);
 
     void writeImpl(const char *msg, size_t size);
 };

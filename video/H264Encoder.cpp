@@ -2,6 +2,7 @@
 #include <thread>
 #include <chrono>
 #include <unistd.h>
+#include <algorithm>
 
 #include "H264Encoder.h"
 #include "../exception.h"
@@ -95,9 +96,20 @@ void H264Encoder::runFeed() {
 }
 
 void H264Encoder::feedImpl(AVFrame *frame) {
+    request_lock.lock();
+    const int64_t target_bitrate = bitrate_requests.empty() ? 0 : *std::min_element(bitrate_requests.begin(), bitrate_requests.end());
+    bitrate_requests.clear();
+    request_lock.unlock();
+
     frame->pts = frame_id;
-    frame->pict_type = AV_PICTURE_TYPE_NONE; // usefull if grabber set all to I-frame so encoder does not output only I-frame
+    // bitrate == -1 means scream want an I frame
+    frame->pict_type = target_bitrate == -1 ? AV_PICTURE_TYPE_I : AV_PICTURE_TYPE_NONE; // useful if grabber set all to I-frame so encoder does not output only I-frame
+
     encoder_lock.lock();
+    if (target_bitrate > 0) {
+        codec_ctx->bit_rate = 0.95 * target_bitrate;
+        //std::cout << target_bitrate << std::endl;
+    }
     int ret = avcodec_send_frame(codec_ctx, frame);
     encoder_lock.unlock();
     encoder_cv.notify_all();
@@ -121,4 +133,10 @@ void H264Encoder::handle(AVFrame *frame) {
         feedImpl(frame);
         av_frame_free(&frame);
     }
+}
+
+void H264Encoder::handle(const int64_t *bitrate_request) {
+    request_lock.lock();
+    bitrate_requests.push_back(*bitrate_request);
+    request_lock.unlock();
 }
