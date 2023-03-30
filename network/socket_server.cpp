@@ -5,6 +5,7 @@
 
 #include "socket_server.h"
 #include "../exception.h"
+#include "../video/H264Encoder.h"
 
 constexpr auto LOOKUP_DELAY = std::chrono::seconds(1);
 constexpr auto NOTIFY_DEADLINE_DELAY = std::chrono::seconds(15);
@@ -142,6 +143,7 @@ void SocketServer::listenSocket() {
             res.first->second.start();
             audio_enc.attachSink(&res.first->second.getRtpAudio());
             video_enc.attachSink(&res.first->second.getRtpVideo());
+            res.first->second.attachSink(reinterpret_cast<H264Encoder*>(&video_enc));
         }
     }
 }
