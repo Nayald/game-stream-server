@@ -27,8 +27,12 @@ void X11Grabber::init(std::unordered_map<std::string, std::string> &params) {
 
     format_ctx = avformat_alloc_context();
     AVInputFormat *ifmt = av_find_input_format("x11grab");
+    // build display string according to environment variable DISPLAY
+    char* env_display = std::getenv("DISPLAY");
+    char* av_filename = strcat(env_display,".0+0,0");
+    
     // offset due to screens of different sizes
-    if(avformat_open_input(&format_ctx, ":0.0+0,0", ifmt, &options) != 0) {
+    if(avformat_open_input(&format_ctx, av_filename, ifmt, &options) != 0) {
         throw InitFail("Couldn't open input stream");
     }
 
